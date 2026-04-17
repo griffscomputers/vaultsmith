@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+set -euo pipefail
+trap 'exit 0' ERR
+
+# Vaultsmith PreToolUse hook for Read tool
+# Blocks reads of secret/credential files, directing to vault MCP instead.
+
+INPUT="$(cat)"
+
+# Extract file_path using jq, fall back to grep/sed
+if command -v jq &>/dev/null; then
+  FILE_PATH="$(echo "$INPUT" | jq -r '.tool_input.file_path // empty')"
+else
+  FILE_PATH="$(echo "$INPUT" | grep -o '"file_path"[[:space:]]*:[[:space:]]*"[^"]*"' | sed 's/.*"file_path"[[:space:]]*:[[:space:]]*"//;s/"$//')"
+fi
+
+[ -z "$FILE_PATH" ] && exit 0
+
+# Get the basename and check against denied patterns
+BASENAME="$(basename "$FILE_PATH")"
+DIRBASE="$(basename "$(dirname "$FILE_PATH")")"
+
+BLOCKED=false
+
+case "$DIRBASE/$BASENAME" in
+  .aws/credentials|.aws/config) BLOCKED=true ;;
+  .docker/config.json)          BLOCKED=true ;;
+esac
+
+case "$BASENAME" in
+  .npmrc|.netrc|.git-credentials) BLOCKED=true ;;
+  .env)                           BLOCKED=true ;;
+  .env.*)                         BLOCKED=true ;;
+esac
+
+if [ "$BLOCKED" = true ]; then
+  printf '{"decision":"block","reason":"Vaultsmith: blocked read of secret file %s. Use vault_get_ref or vault_resolve via MCP instead."}' "$FILE_PATH"
+fi
+
+exit 0

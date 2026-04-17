@@ -1,0 +1,87 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# vault-run: resolve vsm:// secret references in env vars, then exec the command.
+
+usage() {
+  cat >&2 <<'USAGE'
+Usage: vault-run -- <command> [args...]
+
+Resolves vsm:// secret references in environment variables via the OS
+keychain, then spawns the given command with the resolved environment.
+
+Example:
+  export DB_PASSWORD=vsm://db/prod/password
+  vault-run -- psql -h localhost mydb
+USAGE
+  exit 1
+}
+
+# --- Parse args: find the -- separator ---
+
+separator_found=false
+cmd_args=()
+for arg in "$@"; do
+  if [[ "$separator_found" == true ]]; then
+    cmd_args+=("$arg")
+  elif [[ "$arg" == "--" ]]; then
+    separator_found=true
+  fi
+done
+
+if [[ "$separator_found" == false ]]; then
+  echo "Error: missing '--' separator before the command." >&2
+  usage
+fi
+
+if [[ ${#cmd_args[@]} -eq 0 ]]; then
+  echo "Error: no command specified after '--'." >&2
+  usage
+fi
+
+# --- Detect platform ---
+
+platform="$(uname -s)"
+case "$platform" in
+  Darwin) ;;
+  Linux)  ;;
+  *)
+    echo "Error: unsupported platform '$platform'." >&2
+    exit 1
+    ;;
+esac
+
+# --- Resolve vsm:// references ---
+
+resolve_secret() {
+  local ref="$1"
+  # Strip the vsm:// prefix to get the keychain account name
+  local name="${ref#vsm://}"
+
+  case "$platform" in
+    Darwin)
+      security find-generic-password -s vaultsmith -a "$name" -w 2>/dev/null
+      ;;
+    Linux)
+      secret-tool lookup service vaultsmith account "$name" 2>/dev/null
+      ;;
+  esac
+}
+
+while IFS='=' read -r var_name var_value; do
+  if [[ "$var_value" == vsm://* ]]; then
+    resolved="$(resolve_secret "$var_value")" || {
+      echo "Error: failed to resolve secret reference '$var_value' for env var '$var_name'." >&2
+      exit 1
+    }
+    if [[ -z "$resolved" ]]; then
+      echo "Error: empty value returned for secret reference '$var_value' (env var '$var_name')." >&2
+      exit 1
+    fi
+    export "$var_name=$resolved"
+  fi
+done < <(env)
+
+# --- Exec the child command ---
+
+exec "${cmd_args[@]}"

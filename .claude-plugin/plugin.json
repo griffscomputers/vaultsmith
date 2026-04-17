@@ -1,0 +1,9 @@
+{
+  "name": "vaultsmith",
+  "description": "Dev-local secret vaulting and supply-chain credential protection for Claude Code",
+  "version": "0.1.0",
+  "author": {
+    "name": "Grif"
+  },
+  "license": "Apache-2.0"
+}

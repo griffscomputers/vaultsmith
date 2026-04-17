@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "vaultsmith": {
+      "command": "node",
+      "args": ["${PLUGIN_DIR}/mcp/dist/server.js"],
+      "env": {}
+    }
+  }
+}
