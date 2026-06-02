@@ -206,6 +206,16 @@ Backups are encrypted in .vaultsmith/quarantine/. To restore a backup:
   2. Decrypt: openssl enc -d -aes-256-cbc -salt -pbkdf2 -in <backup_file> -out <restored_file> -pass pass:<key>
 
 Next steps:
+  - Approve each new secret with the macOS Keychain dialog by running
+    one interactive command per consumer, e.g.:
+      vault-run -- aws sts get-caller-identity
+    A Keychain Access dialog will appear for each newly stored secret.
+    Click "Allow" — NOT "Always Allow". Per-session consent is the
+    intended model: a future vault-session daemon will cache resolved
+    values in memory so one prompt per secret per session is enough.
+    Persistent grants would defeat protection against supply-chain
+    malware that scrapes for plaintext creds. (macOS only — Linux does
+    not gate via these mechanics.)
   - Test your workflows with `vault-run` to ensure secrets resolve correctly.
   - Verify your application still starts and connects to services.
   - Once confirmed, you can delete the quarantine backups.

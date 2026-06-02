@@ -2,6 +2,15 @@
 set -euo pipefail
 
 # vault-run: resolve vsm:// secret references in env vars, then exec the command.
+#
+# Consent model (macOS): items stored by vaultsmith use an empty trusted-apps
+# ACL (`security add-generic-password -T ""`), so every keychain read triggers
+# a native Keychain Access dialog. To keep the UX per-SESSION rather than
+# per-command, vault-run routes macOS resolutions through the vault-session
+# daemon, which caches resolved values in memory for the lifetime of the
+# controlling TTY (or anchor PID when there's no TTY). One prompt per secret
+# per session; close the terminal or run `vault-lock` to force re-consent.
+# Linux still shells directly to secret-tool (no per-item prompt mechanic).
 
 usage() {
   cat >&2 <<'USAGE'
@@ -51,6 +60,41 @@ case "$platform" in
     ;;
 esac
 
+# --- Resolve plugin dir + session anchor (macOS only) ---
+
+if [[ -z "${PLUGIN_DIR:-}" ]]; then
+  PLUGIN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+fi
+
+if [[ "$platform" == "Darwin" ]]; then
+  # Walk up the process tree to find the controlling TTY. The Bash tool
+  # invocations inside Claude often have no TTY of their own, but a parent
+  # process does — anchoring there lets sub-agents in the same terminal pane
+  # share the daemon cache.
+  detect_tty() {
+    local pid=$$
+    local tty
+    while [[ "$pid" -gt 1 ]]; do
+      tty="$(ps -o tty= -p "$pid" 2>/dev/null | tr -d ' ')"
+      if [[ -n "$tty" && "$tty" != "?" && "$tty" != "??" ]]; then
+        echo "/dev/$tty"
+        return 0
+      fi
+      pid="$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d ' ')"
+      [[ -z "$pid" || "$pid" == "0" ]] && break
+    done
+    return 1
+  }
+
+  if tty_path="$(detect_tty)" && [[ -e "$tty_path" ]]; then
+    export VAULTSMITH_ANCHOR_TTY="$tty_path"
+  else
+    # No TTY found — fall back to anchoring on the parent PID. Daemon will
+    # exit when that PID is gone.
+    export VAULTSMITH_ANCHOR_PID="$PPID"
+  fi
+fi
+
 # --- Resolve vsm:// references ---
 
 resolve_secret() {
@@ -60,7 +104,7 @@ resolve_secret() {
 
   case "$platform" in
     Darwin)
-      security find-generic-password -s vaultsmith -a "$name" -w 2>/dev/null
+      "${PLUGIN_DIR}/bin/vault-resolve" "$name"
       ;;
     Linux)
       secret-tool lookup service vaultsmith account "$name" 2>/dev/null

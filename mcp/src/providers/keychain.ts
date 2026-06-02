@@ -101,6 +101,10 @@ export class KeychainProvider implements VaultProvider {
   }
 
   private async setMacOS(name: string, value: string): Promise<void> {
+    // -T "" creates the item with an empty trusted-applications ACL, so every
+    // subsequent `security find-generic-password` surfaces the native macOS
+    // Keychain Access prompt. -U preserves the value-upsert behavior but does
+    // NOT rewrite the ACL of an existing item; pre-ACL entries need delete+re-add.
     try {
       await execFileAsync("security", [
         "add-generic-password",
@@ -109,6 +113,8 @@ export class KeychainProvider implements VaultProvider {
         SERVICE,
         "-a",
         name,
+        "-T",
+        "",
         "-w",
         value,
       ]);

@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# vault-resolve: resolve a single vault secret name to its plaintext via the
+# vault-session daemon. Used internally by vault-run. Prints the resolved
+# value on stdout.
+#
+# Usage: vault-resolve <name>
+#   where <name> is the keychain account name (e.g. aws/default/access_key_id)
+
+if [[ -z "${PLUGIN_DIR:-}" ]]; then
+  PLUGIN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+fi
+
+exec node "${PLUGIN_DIR}/mcp/dist/cli/resolve-client.js" "$@"

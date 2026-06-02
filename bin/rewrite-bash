@@ -3,7 +3,15 @@ set -euo pipefail
 trap 'exit 0' ERR
 
 # Vaultsmith PreToolUse hook for Bash tool
-# Blocks shell commands that would read secret/credential files into context.
+# - BLOCKS shell commands that would read secret/credential files into context.
+# - For SUSPICIOUS-but-not-blocked patterns (e.g. curl-to-shell, base64-to-shell,
+#   eval $(curl ...)), force re-consent by locking the vault-session daemon
+#   cache. The command itself is allowed to run; if it tries to access vault
+#   secrets, the user will be re-prompted instead of inheriting warm consent.
+
+if [[ -z "${PLUGIN_DIR:-}" ]]; then
+  PLUGIN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+fi
 
 INPUT="$(cat)"
 
@@ -57,6 +65,39 @@ fi
 
 if [ "$BLOCKED" = true ]; then
   printf '{"decision":"block","reason":"Vaultsmith: blocked bash command that reads secret files. Use vault-run wrapper instead."}'
+  exit 0
+fi
+
+# --- Suspicious-but-not-blocked patterns: lock vault, then allow command ---
+#
+# These are network-to-execute patterns frequently abused by supply-chain
+# attacks. We do NOT block (legit installers use these too), but we lock
+# the vault-session cache so any subsequent secret access re-prompts.
+
+SUSPICIOUS=false
+
+# curl|wget piped to a shell
+if echo "$CMD" | grep -qE '(curl|wget)[^|]*\|[[:space:]]*(sh|bash|zsh)([[:space:]]|$|;)'; then
+  SUSPICIOUS=true
+fi
+
+# eval $(curl ...) or eval `curl ...`
+if echo "$CMD" | grep -qE 'eval[[:space:]]+["$`(]+[[:space:]]*(curl|wget)'; then
+  SUSPICIOUS=true
+fi
+
+# base64 -d / -D / --decode piped to a shell
+if echo "$CMD" | grep -qE 'base64[[:space:]]+(-d|-D|--decode)[^|]*\|[[:space:]]*(sh|bash|zsh)'; then
+  SUSPICIOUS=true
+fi
+
+# curl|wget piped to an interpreter executing inline code
+if echo "$CMD" | grep -qE '(curl|wget)[^|]*\|[[:space:]]*(python3?|node|ruby|perl)[[:space:]]+-c'; then
+  SUSPICIOUS=true
+fi
+
+if [ "$SUSPICIOUS" = true ]; then
+  "${PLUGIN_DIR}/bin/vault-lock" --all >/dev/null 2>&1 || true
 fi
 
 exit 0

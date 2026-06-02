@@ -69,15 +69,21 @@ Verify that the OS keychain is accessible by writing, reading, and deleting a te
 **On macOS:**
 
 ```bash
-# Write test secret
-security add-generic-password -a "vaultsmith" -s "vaultsmith/__test__" -w "vaultsmith-test-ok" -U
+# Write test secret with empty trusted-apps ACL (-T "") so reads are gated by
+# the native Keychain Access prompt. The user WILL see one dialog on the
+# read-back below — click "Allow" (NOT "Always Allow"). Per-session consent is
+# the intended model; persistent grants would defeat protection against
+# supply-chain scrapers that just shell to `security`.
+security add-generic-password -a "vaultsmith" -s "vaultsmith/__test__" -w "vaultsmith-test-ok" -T "" -U
 
-# Read it back
+# Read it back (this will trigger a Keychain Access prompt the first time)
 security find-generic-password -a "vaultsmith" -s "vaultsmith/__test__" -w
 
 # Delete it
 security delete-generic-password -a "vaultsmith" -s "vaultsmith/__test__"
 ```
+
+If the user sees the Keychain Access dialog and the read returns `vaultsmith-test-ok` after they approve, the prompt-gated flow is working as intended — this is the same dialog they'll see for real AWS / `.env` secrets later.
 
 **On Linux:**
 
@@ -139,7 +145,39 @@ Check if `.gitignore` exists in the project root.
 
 ---
 
-## Step 7 — Report results
+## Step 7 — Detect and offer to upgrade pre-ACL entries (macOS only)
+
+If the OS is macOS, check whether the user already has `vaultsmith`-service entries in the keychain from a prior install. Items stored before the `-T ""` ACL was introduced will silently resolve forever, defeating the prompt-based "allow" model.
+
+1. List existing entries:
+
+   ```bash
+   security dump-keychain 2>/dev/null | awk -F\" '/"svce"<blob>="vaultsmith"/{getline; if ($0 ~ /"acct"<blob>=/) print $2}'
+   ```
+
+2. If the list is empty, skip the rest of this step.
+
+3. If entries exist, print them to the user and ask:
+
+   > "Found <N> existing vault entries that may pre-date the prompt-based ACL. Re-store them with the new ACL? Each entry will produce one Keychain Access prompt next time it is accessed. (yes/no)"
+
+4. On confirmation, for each entry, read the value, delete the item, then re-add it with `-T ""`:
+
+   ```bash
+   for n in $(security dump-keychain 2>/dev/null | awk -F\" '/"svce"<blob>="vaultsmith"/{getline; if ($0 ~ /"acct"<blob>=/) print $2}'); do
+     v=$(security find-generic-password -s vaultsmith -a "$n" -w) || continue
+     security delete-generic-password -s vaultsmith -a "$n" >/dev/null
+     security add-generic-password -s vaultsmith -a "$n" -w "$v" -T "" -U
+   done
+   ```
+
+5. Each read in the loop above will surface a Keychain Access prompt for entries that were previously stored without `-T ""`. That's expected — the user is approving the read so the value can be re-stored with the new ACL.
+
+Skip this step on Linux — `secret-tool` does not have the same ACL semantics, and entries do not need to be re-stored.
+
+---
+
+## Step 8 — Report results
 
 Print a clear summary to the user:
 
@@ -152,11 +190,19 @@ Vaultsmith initialized successfully.
   Keychain test:     passed
   Permissions:       .claude/settings.json updated (8 denied paths)
   Gitignore:         .vaultsmith/ added
+  ACL upgrade:       <N entries re-stored | no pre-ACL entries found | skipped (Linux)>
 
 The vault is ready. Use the Vaultsmith MCP tools to manage secrets:
   - vault_set(key, value)   — store a secret in the OS keychain
   - vault_list()            — list stored secret keys
   - vault_resolve(key)      — retrieve a secret value at runtime
+
+macOS allow model: secrets are stored with an empty trusted-apps ACL.
+Every access surfaces a Keychain Access dialog — pick "Allow" (NOT "Always
+Allow"). Per-session consent is the intended model: a future vault-session
+daemon will cache resolved values in memory so you only see one prompt per
+secret per terminal session. Persistent grants are avoided on purpose. See
+docs/aws-keychain-walkthrough.md for the full end-to-end flow.
 ```
 
 Adjust the summary if any paths were already present in settings or gitignore (note that they were already configured rather than newly added).

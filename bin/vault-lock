@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# vault-lock: clear the in-memory vault-session cache. Forces the next
+# vault-run (or other vault consumer) to re-prompt via macOS Keychain Access.
+#
+# Use after a sensitive workflow, before invoking untrusted commands, or
+# whenever you want fresh consent state.
+#
+# Usage:
+#   vault-lock              Lock only the daemon for this terminal session
+#   vault-lock --all        Lock every running daemon for this user
+#   vault-lock --status     Show status of running daemons (no lock)
+
+if [[ -z "${PLUGIN_DIR:-}" ]]; then
+  PLUGIN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+fi
+
+exec node "${PLUGIN_DIR}/mcp/dist/cli/lock-client.js" "$@"
